@@ -1,0 +1,8 @@
+[build]
+target = "wasm32-unknown-unknown"
+rustflags = [
+    "--remap-path-prefix",
+    "src/=/app/",
+    "--remap-path-prefix",
+    "C:/Users/simon/.cargo/=/cargo/"
+]

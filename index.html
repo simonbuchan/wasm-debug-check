@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WASM Host</title>
+<script type="module">
+const wasmPath = "./target/wasm32-unknown-unknown/debug/wasm_debug_check.wasm";
+const wasm = await WebAssembly.instantiateStreaming(fetch(wasmPath), {
+    env: {
+        console_log(ptr, len) {
+            console.log(new TextDecoder().decode(read(ptr, len)));
+        },
+        console_error(ptr, len) {
+            console.error(new TextDecoder().decode(read(ptr, len)));
+        },
+    },
+});
+
+const { exports } = wasm.instance;
+
+exports.init();
+
+function read(ptr, len) {
+    return new Uint8Array(exports.memory.buffer).slice(ptr, ptr + len);
+}
+
+function write(ptr, data) {
+    new Uint8Array(exports.memory.buffer).set(ptr, data);
+}
+
+function alloc(size, align = 1) {
+    const ptr = exports.alloc(size, 1);
+    return [ptr, () => exports.dealloc(size, align, ptr)]
+}
+
+function parse(data) {
+    const [ptr, free] = alloc(data.length);
+    write(ptr, data);
+    console.log("request parse of %s bytes", data.length);
+    exports.parse(ptr, data.length);
+    free();
+}
+
+addEventListener("dragover", (event) => {
+    event.preventDefault();
+});
+
+addEventListener("drop", async (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer.items[0].getAsFile();
+    const data = new Uint8Array(await file.arrayBuffer());
+    parse(data);
+})
+</script>
+</head>
+<body>
+</body>
+</html>
