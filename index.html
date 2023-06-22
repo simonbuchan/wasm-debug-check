@@ -4,42 +4,115 @@
 <meta charset="UTF-8">
 <title>WASM Host</title>
 <script type="module">
-const wasmPath = "./target/wasm32-unknown-unknown/debug/wasm_debug_check.wasm";
-const wasm = await WebAssembly.instantiateStreaming(fetch(wasmPath), {
-    env: {
-        console_log(ptr, len) {
-            console.log(new TextDecoder().decode(read(ptr, len)));
+    import * as wasm from "./wasm.mjs";
+
+    function parse(data) {
+    let ptr = wasm.exports.parse(data.ptr, data.size);
+    return {
+        *exports() {
+            if (!ptr) throw new Error("no parse result");
+            const vec_box_ptr = wasm.exports.parse_exports(ptr);
+            try {
+                const [vec_ptr, vec_len] = wasm.memoryUsize(vec_box_ptr, 2);
+                const vec = wasm.memoryUsize(vec_ptr, vec_len * 2);
+                let i = 0;
+                while (i < vec.length) {
+                    const name_ptr = vec[i++];
+                    const name_len = vec[i++];
+                    const name = wasm.memoryUtf8(name_ptr, name_len);
+                    yield name;
+                }
+            } finally {
+                wasm.exports.box_vec_str_drop(vec_box_ptr);
+            }
         },
-        console_error(ptr, len) {
-            console.error(new TextDecoder().decode(read(ptr, len)));
+        *imports() {
+            if (!ptr) throw new Error("no parse result");
+            const vec_box_ptr = wasm.exports.parse_imports(ptr);
+            try {
+                const [vec_ptr, vec_len] = wasm.memoryUsize(vec_box_ptr, 2);
+                const vec = wasm.memoryUsize(vec_ptr, vec_len * 2);
+                let i = 0;
+                while (i < vec.length) {
+                    const dll_ptr = vec[i++];
+                    const dll_len = vec[i++];
+                    const dll = wasm.memoryUtf8(dll_ptr, dll_len);
+                    const name_ptr = vec[i++];
+                    const name_len = vec[i++];
+                    const name = wasm.memoryUtf8(name_ptr, name_len);
+                    yield { dll, name };
+                }
+            } finally {
+                wasm.exports.box_vec_str_drop(vec_box_ptr);
+            }
         },
-    },
+        drop() {
+            if (!ptr) throw new Error("no parse result");
+            const p = ptr;
+            ptr = 0;
+            wasm.exports.parse_drop(p);
+        },
+    };
+}
+
+const $ = (s) => document.querySelector(s);
+const h = (t, ...children) => {
+    const el = document.createElement(t);
+    if (children[0] && typeof children[0] === "object" && !(children[0] instanceof Node)) {
+        Object.assign(el, children.shift());
+    }
+    for (const child of children) {
+        el.append(child);
+    }
+    return el;
+};
+
+const parseButton = $("#parse");
+parseButton.disabled = true;
+const dataOutput = $("#data");
+
+const exportsList = $("#exports");
+const importsList = $("#imports");
+
+let data;
+
+async function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function delayEveryNth(ms, n) {
+    let i = 0;
+    return async () => {
+        if (++i % n === 0) {
+            await delay(ms);
+        }
+    };
+}
+
+parseButton.addEventListener("click", async () => {
+    performance.mark("parse-start");
+    exportsList.replaceChildren();
+    importsList.replaceChildren();
+    const parse_delay = delay(0);
+    const pe = parse(data);
+    await parse_delay;
+
+    const chunkRender = delayEveryNth(0, 1000);
+    try {
+        for (const name of pe.exports()) {
+            exportsList.append(h("li", h("code", name)));
+            await chunkRender();
+        }
+        for (const { dll, name } of pe.imports()) {
+            importsList.append(h("li", h("code", `${dll}!${name}`)));
+            await chunkRender();
+        }
+    } finally {
+        pe.drop();
+        performance.mark("parse-end");
+        performance.measure("parse", "parse-start", "parse-end");
+    }
 });
-
-const { exports } = wasm.instance;
-
-exports.init();
-
-function read(ptr, len) {
-    return new Uint8Array(exports.memory.buffer).slice(ptr, ptr + len);
-}
-
-function write(ptr, data) {
-    new Uint8Array(exports.memory.buffer).set(ptr, data);
-}
-
-function alloc(size, align = 1) {
-    const ptr = exports.alloc(size, 1);
-    return [ptr, () => exports.dealloc(size, align, ptr)]
-}
-
-function parse(data) {
-    const [ptr, free] = alloc(data.length);
-    write(ptr, data);
-    console.log("request parse of %s bytes", data.length);
-    exports.parse(ptr, data.length);
-    free();
-}
 
 addEventListener("dragover", (event) => {
     event.preventDefault();
@@ -47,12 +120,32 @@ addEventListener("dragover", (event) => {
 
 addEventListener("drop", async (event) => {
     event.preventDefault();
+    performance.mark("drop-start");
     const file = event.dataTransfer.items[0].getAsFile();
-    const data = new Uint8Array(await file.arrayBuffer());
-    parse(data);
+
+    parseButton.disabled = true;
+    data?.free();
+
+    data = await wasm.allocFromStream(file.size, file.stream());
+    parseButton.disabled = false;
+
+    const hex = Array.from(
+        new Uint8Array(data.slice(0, 16)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+    ).join(" ");
+    dataOutput.innerText = `data = [${data.ptr.toString(16)}] ${data.size} bytes: ${hex}`;
+    performance.mark("drop-end");
+    performance.measure("drop", "drop-start", "drop-end");
 })
+
 </script>
 </head>
 <body>
+<button id="parse">Parse</button>
+<output id="data"></output>
+<h3>Exports:</h3>
+<ul id="exports"></ul>
+<h3>Imports:</h3>
+<ul id="imports"></ul>
 </body>
 </html>

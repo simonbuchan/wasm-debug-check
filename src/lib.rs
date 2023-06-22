@@ -3,7 +3,7 @@
 
 mod ffi;
 
-use ffi::IntoNative;
+use ffi::{IntoFfi, IntoNative};
 
 #[no_mangle]
 unsafe fn alloc(layout: ffi::Layout) -> *mut u8 {
@@ -40,10 +40,41 @@ fn init() {
 }
 
 #[no_mangle]
-fn parse(data: &[u8]) {
-    console::log(&format!("received {} bytes!", data.len()));
-    let pe = goblin::pe::PE::parse(data).unwrap();
-    for export in pe.exports {
-        console::log(export.name.unwrap_or("<unnamed>"));
-    }
+fn parse<'a>(data: ffi::Slice<u8>) -> ffi::Box<goblin::pe::PE<'a>> {
+    let data = unsafe { data.into_native() };
+    Box::new(goblin::pe::PE::parse(data).unwrap()).into_ffi()
+}
+
+#[no_mangle]
+fn parse_drop(data: ffi::Box<goblin::pe::PE<'_>>) {
+    drop(unsafe { data.into_native() });
+}
+
+#[no_mangle]
+fn parse_exports(pe: ffi::Box<goblin::pe::PE<'_>>) -> ffi::Box<ffi::Vec<ffi::Str>> {
+    let vec = unsafe { pe.0.as_ref() }
+        .unwrap()
+        .exports
+        .iter()
+        .map(|export| export.name.unwrap_or("<none>").into_ffi())
+        .collect::<Vec<_>>()
+        .into_ffi();
+    Box::new(vec).into_ffi()
+}
+
+#[no_mangle]
+fn parse_imports(pe: ffi::Box<goblin::pe::PE<'_>>) -> ffi::Box<ffi::Vec<ffi::Str>> {
+    let vec = unsafe { pe.0.as_ref() }
+        .unwrap()
+        .imports
+        .iter()
+        .flat_map(|import| [import.dll.into_ffi(), import.name.into_ffi()])
+        .collect::<Vec<_>>()
+        .into_ffi();
+    Box::new(vec).into_ffi()
+}
+
+#[no_mangle]
+fn box_vec_str_drop(data: ffi::Box<ffi::Vec<ffi::Str>>) {
+    drop(unsafe { data.into_native().into_native() });
 }
